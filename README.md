@@ -49,7 +49,7 @@ SalesForecasting_[YourName]/
 ├── train.csv              # Primary Dataset (Superstore Sales - 4 Years)
 ├── vgsales.csv            # Secondary Dataset (Video Game Sales - for merging practice)
 │
-└── charts/                # Exported visualizations (Decomposition, Forecasts, PCA)
+└── images/                # Exported visualizations (Decomposition, Forecasts, PCA)
     ├── decomposition.png
     ├── model_comparison.png
     ├── anomaly_detection.png
