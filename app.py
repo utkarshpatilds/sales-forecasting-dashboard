@@ -83,7 +83,7 @@ def load_data() -> pd.DataFrame:
         st.stop()
 
 
-    # Robust date parsing — works on pandas 1.x AND 2.x
+    # Robust date parsing — works on pandas 1.x, 2.x, 3.x
 
     for col in ("Order Date", "Ship Date"):
 
@@ -153,14 +153,6 @@ page = st.sidebar.selectbox(
 
 def run_forecast(_monthly_df: pd.DataFrame, horizon: int) -> pd.DataFrame:
 
-    """
-
-    Trains AutoARIMA + AutoETS + Naive on the monthly series and
-
-    returns the out-of-sample forecast DataFrame from statsforecast.
-
-    """
-
     sf = StatsForecast(
 
         models=[AutoARIMA(season_length=12), AutoETS(season_length=12), Naive()],
@@ -213,9 +205,11 @@ if page == "📊 Sales Overview":
     fig_year.update_layout(showlegend=False)
 
 
+    # NOTE: pandas 3.x removed 'M' — using 'MS' (month start) instead
+
     monthly_sales = (
 
-        df.groupby(pd.Grouper(key="Order Date", freq="M"))["Sales"]
+        df.groupby(pd.Grouper(key="Order Date", freq="MS"))["Sales"]
 
         .sum()
 
@@ -234,11 +228,11 @@ if page == "📊 Sales Overview":
 
     with col1:
 
-        st.plotly_chart(fig_year, use_container_width=True)
+        st.plotly_chart(fig_year, width="stretch")
 
     with col2:
 
-        st.plotly_chart(fig_month, use_container_width=True)
+        st.plotly_chart(fig_month, width="stretch")
 
 
     st.subheader("Interactive Filters")
@@ -298,7 +292,7 @@ if page == "📊 Sales Overview":
 
     )
 
-    st.plotly_chart(fig_cat_reg, use_container_width=True)
+    st.plotly_chart(fig_cat_reg, width="stretch")
 
 
 # ============================================================
@@ -358,11 +352,11 @@ elif page == "🔮 Forecast Explorer":
             st.stop()
 
 
-        # Aggregate to monthly
+        # pandas 3.x: 'MS' instead of 'M'
 
         monthly_sub = (
 
-            subset.groupby(pd.Grouper(key="Order Date", freq="M"))["Sales"]
+            subset.groupby(pd.Grouper(key="Order Date", freq="MS"))["Sales"]
 
             .sum()
 
@@ -428,14 +422,12 @@ elif page == "🔮 Forecast Explorer":
         )
 
 
-        model_col = "AutoARIMA"  # primary champion
+        model_col = "AutoARIMA"
 
         if model_col not in forecast.columns:
 
             model_col = [c for c in forecast.columns if c not in ("unique_id", "ds")][0]
 
-
-        # 95% CI band
 
         lo_col = f"{model_col}-lo-95"
 
@@ -485,8 +477,6 @@ elif page == "🔮 Forecast Explorer":
         )
 
 
-        # Show the other models too if present
-
         for alt in ("AutoETS", "Naive"):
 
             if alt in forecast.columns:
@@ -524,10 +514,8 @@ elif page == "🔮 Forecast Explorer":
 
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
-
-        # ---- Metrics ----
 
         st.subheader("Model Performance Metrics (overall)")
 
@@ -541,8 +529,6 @@ elif page == "🔮 Forecast Explorer":
 
             st.metric("Root Mean Squared Error (RMSE)", "$11,672.63")
 
-
-        # ---- Forecast table ----
 
         st.subheader(f"Forecast Data (next {periods} months)")
 
@@ -576,7 +562,7 @@ elif page == "🔮 Forecast Explorer":
 
         )
 
-        st.dataframe(pretty, use_container_width=True)
+        st.dataframe(pretty, width="stretch")
 
 
 # ============================================================
@@ -656,7 +642,7 @@ elif page == "🚨 Anomaly Report":
 
         fig.update_layout(template="plotly_white")
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 
         st.subheader("Detected Anomalies")
@@ -675,7 +661,7 @@ elif page == "🚨 Anomaly Report":
 
                 .reset_index(drop=True),
 
-                use_container_width=True,
+                width="stretch",
 
             )
 
@@ -719,7 +705,7 @@ elif page == "📦 Product Demand Segments":
 
     monthly_subcat = (
 
-        df.groupby(["Sub-Category", pd.Grouper(key="Order Date", freq="M")])["Sales"]
+        df.groupby(["Sub-Category", pd.Grouper(key="Order Date", freq="MS")])["Sales"]
 
         .sum()
 
@@ -832,7 +818,7 @@ elif page == "📦 Product Demand Segments":
 
     fig.update_layout(template="plotly_white")
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
     st.subheader("Cluster Details")
@@ -845,7 +831,7 @@ elif page == "📦 Product Demand Segments":
 
         .reset_index(drop=True),
 
-        use_container_width=True,
+        width="stretch",
 
     )
 
