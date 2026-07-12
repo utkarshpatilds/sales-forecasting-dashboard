@@ -2,7 +2,7 @@
 
 Sales Forecasting & Anomaly Detection Dashboard
 
-Built with Streamlit + Prophet + scikit-learn + Plotly
+Built with Streamlit + statsforecast + scikit-learn + Plotly
 
 """
 
@@ -17,7 +17,9 @@ import plotly.express as px
 
 import plotly.graph_objects as go
 
-from prophet import Prophet
+from statsforecast import StatsForecast
+
+from statsforecast.models import AutoARIMA, AutoETS, Naive
 
 from sklearn.ensemble import IsolationForest
 
@@ -91,12 +93,8 @@ def load_data() -> pd.DataFrame:
 
         except TypeError:
 
-            # pandas < 2.0 — `format='mixed'` doesn't exist
-
             df[col] = pd.to_datetime(df[col], errors="coerce")
 
-
-    # Drop rows where the date didn't parse
 
     before = len(df)
 
@@ -109,12 +107,9 @@ def load_data() -> pd.DataFrame:
         st.warning(f"⚠️ Dropped {dropped} rows with unparseable order dates.")
 
 
-    # Ensure Sales is numeric
-
     df["Sales"] = pd.to_numeric(df["Sales"], errors="coerce")
 
     df = df.dropna(subset=["Sales"]).reset_index(drop=True)
-
 
     return df
 
@@ -150,6 +145,42 @@ page = st.sidebar.selectbox(
 
 # ============================================================
 
+# Helper: cached forecaster
+
+# ============================================================
+
+@st.cache_data(show_spinner="Training forecast model...")
+
+def run_forecast(_monthly_df: pd.DataFrame, horizon: int) -> pd.DataFrame:
+
+    """
+
+    Trains AutoARIMA + AutoETS + Naive on the monthly series and
+
+    returns the out-of-sample forecast DataFrame from statsforecast.
+
+    """
+
+    sf = StatsForecast(
+
+        models=[AutoARIMA(season_length=12), AutoETS(season_length=12), Naive()],
+
+        freq="MS",
+
+        n_jobs=1,
+
+    )
+
+    sf.fit(_monthly_df)
+
+    forecast = sf.predict(h=horizon, level=[80, 95])
+
+    return forecast
+
+
+
+# ============================================================
+
 # PAGE 1 — Sales Overview
 
 # ============================================================
@@ -158,8 +189,6 @@ if page == "📊 Sales Overview":
 
     st.title("📊 Sales Overview Dashboard")
 
-
-    # Yearly sales
 
     df_year = df.assign(Year=df["Order Date"].dt.year)
 
@@ -184,8 +213,6 @@ if page == "📊 Sales Overview":
     fig_year.update_layout(showlegend=False)
 
 
-    # Monthly sales
-
     monthly_sales = (
 
         df.groupby(pd.Grouper(key="Order Date", freq="M"))["Sales"]
@@ -198,15 +225,7 @@ if page == "📊 Sales Overview":
 
     fig_month = px.line(
 
-        monthly_sales,
-
-        x="Order Date",
-
-        y="Sales",
-
-        title="Monthly Sales Trend",
-
-        markers=True,
+        monthly_sales, x="Order Date", y="Sales", title="Monthly Sales Trend", markers=True
 
     )
 
@@ -221,8 +240,6 @@ if page == "📊 Sales Overview":
 
         st.plotly_chart(fig_month, use_container_width=True)
 
-
-    # Interactive filters
 
     st.subheader("Interactive Filters")
 
@@ -298,7 +315,9 @@ elif page == "🔮 Forecast Explorer":
 
         "Pick a **Category** or **Region**, choose a forecast horizon, "
 
-        "and we'll fit a **Facebook Prophet** model and project the next few months."
+        "and we'll fit **AutoARIMA + AutoETS + Naive** (via Nixtla `statsforecast`) "
+
+        "and project the next few months."
 
     )
 
@@ -339,7 +358,7 @@ elif page == "🔮 Forecast Explorer":
             st.stop()
 
 
-        # Aggregate monthly
+        # Aggregate to monthly
 
         monthly_sub = (
 
@@ -351,57 +370,42 @@ elif page == "🔮 Forecast Explorer":
 
             .rename(columns={"Order Date": "ds", "Sales": "y"})
 
+            .sort_values("ds")
+
         )
 
-
-        # Prophet needs >= 2 rows and non-negative y
+        monthly_sub["y"] = monthly_sub["y"].clip(lower=0).astype(float)
 
         monthly_sub = monthly_sub.dropna()
 
-        monthly_sub["y"] = monthly_sub["y"].clip(lower=0)
+        monthly_sub["unique_id"] = segment_val  # required by statsforecast
 
 
-        if len(monthly_sub) < 3:
+        if len(monthly_sub) < 6:
 
             st.error(
 
                 f"❌ Not enough history for **{segment_val}** "
 
-                f"(need ≥ 3 months, got {len(monthly_sub)})."
+                f"(need ≥ 6 months, got {len(monthly_sub)})."
 
             )
 
             st.stop()
 
 
-        with st.spinner("Training Prophet and forecasting..."):
+        try:
 
-            try:
+            forecast = run_forecast(monthly_sub, periods)
 
-                model = Prophet(
+        except Exception as e:
 
-                    yearly_seasonality=True,
+            st.error(f"❌ Forecast model failed: {e}")
 
-                    weekly_seasonality=False,
-
-                    daily_seasonality=False,
-
-                )
-
-                model.fit(monthly_sub)
-
-                future = model.make_future_dataframe(periods=periods, freq="M")
-
-                forecast = model.predict(future)
-
-            except Exception as e:
-
-                st.error(f"❌ Prophet failed to fit: {e}")
-
-                st.stop()
+            st.stop()
 
 
-        # Plot with Plotly (more reliable than matplotlib for Streamlit)
+        # ---- Plot the actuals + forecasts ----
 
         fig = go.Figure()
 
@@ -423,17 +427,56 @@ elif page == "🔮 Forecast Explorer":
 
         )
 
+
+        model_col = "AutoARIMA"  # primary champion
+
+        if model_col not in forecast.columns:
+
+            model_col = [c for c in forecast.columns if c not in ("unique_id", "ds")][0]
+
+
+        # 95% CI band
+
+        lo_col = f"{model_col}-lo-95"
+
+        hi_col = f"{model_col}-hi-95"
+
+        if lo_col in forecast.columns and hi_col in forecast.columns:
+
+            fig.add_trace(
+
+                go.Scatter(
+
+                    x=forecast["ds"].tolist() + forecast["ds"][::-1].tolist(),
+
+                    y=forecast[hi_col].tolist() + forecast[lo_col][::-1].tolist(),
+
+                    fill="toself",
+
+                    fillcolor="rgba(255,127,14,0.18)",
+
+                    line=dict(color="rgba(255,255,255,0)"),
+
+                    hoverinfo="skip",
+
+                    name="95% Confidence interval",
+
+                )
+
+            )
+
+
         fig.add_trace(
 
             go.Scatter(
 
                 x=forecast["ds"],
 
-                y=forecast["yhat"],
+                y=forecast[model_col],
 
-                mode="lines",
+                mode="lines+markers",
 
-                name="Forecast (yhat)",
+                name=f"Forecast ({model_col})",
 
                 line=dict(color="#ff7f0e"),
 
@@ -441,27 +484,31 @@ elif page == "🔮 Forecast Explorer":
 
         )
 
-        fig.add_trace(
 
-            go.Scatter(
+        # Show the other models too if present
 
-                x=forecast["ds"].tolist() + forecast["ds"][::-1].tolist(),
+        for alt in ("AutoETS", "Naive"):
 
-                y=forecast["yhat_upper"].tolist() + forecast["yhat_lower"][::-1].tolist(),
+            if alt in forecast.columns:
 
-                fill="toself",
+                fig.add_trace(
 
-                fillcolor="rgba(255,127,14,0.15)",
+                    go.Scatter(
 
-                line=dict(color="rgba(255,255,255,0)"),
+                        x=forecast["ds"],
 
-                hoverinfo="skip",
+                        y=forecast[alt],
 
-                name="Confidence interval",
+                        mode="lines",
 
-            )
+                        name=f"Forecast ({alt})",
 
-        )
+                        line=dict(dash="dot"),
+
+                    )
+
+                )
+
 
         fig.update_layout(
 
@@ -473,25 +520,14 @@ elif page == "🔮 Forecast Explorer":
 
             template="plotly_white",
 
+            hovermode="x unified",
+
         )
 
         st.plotly_chart(fig, use_container_width=True)
 
 
-        # Components
-
-        with st.expander("Show trend & seasonality components"):
-
-            try:
-
-                comp_fig = model.plot_components(forecast)
-
-                st.pyplot(comp_fig)
-
-            except Exception as e:
-
-                st.warning(f"Could not render components: {e}")
-
+        # ---- Metrics ----
 
         st.subheader("Model Performance Metrics (overall)")
 
@@ -506,15 +542,19 @@ elif page == "🔮 Forecast Explorer":
             st.metric("Root Mean Squared Error (RMSE)", "$11,672.63")
 
 
-        st.subheader("Forecast Data (last `periods` months)")
+        # ---- Forecast table ----
 
-        st.dataframe(
+        st.subheader(f"Forecast Data (next {periods} months)")
 
-            forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]]
+        display_cols = ["ds", model_col]
 
-            .tail(periods)
+        if lo_col in forecast.columns:
 
-            .reset_index(drop=True)
+            display_cols += [lo_col, hi_col]
+
+        pretty = (
+
+            forecast[display_cols]
 
             .rename(
 
@@ -522,19 +562,21 @@ elif page == "🔮 Forecast Explorer":
 
                     "ds": "Date",
 
-                    "yhat": "Forecast",
+                    model_col: "Forecast",
 
-                    "yhat_lower": "Lower",
+                    lo_col: "Lower (95%)",
 
-                    "yhat_upper": "Upper",
+                    hi_col: "Upper (95%)",
 
                 }
 
-            ),
+            )
 
-            use_container_width=True,
+            .reset_index(drop=True)
 
         )
+
+        st.dataframe(pretty, use_container_width=True)
 
 
 # ============================================================
@@ -664,19 +706,11 @@ elif page == "📦 Product Demand Segments":
         st.stop()
 
 
-    # Feature engineering
-
     subcat_basic = (
 
         df.groupby("Sub-Category")
 
-        .agg(
-
-            Total_Sales=("Sales", "sum"),
-
-            Avg_Order_Value=("Sales", "mean"),
-
-        )
+        .agg(Total_Sales=("Sales", "sum"), Avg_Order_Value=("Sales", "mean"))
 
         .reset_index()
 
@@ -719,7 +753,7 @@ elif page == "📦 Product Demand Segments":
 
     growth_frames = []
 
-    for subcat, grp in yearly_subcat.groupby("Sub-Category"):
+    for _, grp in yearly_subcat.groupby("Sub-Category"):
 
         g = grp.sort_values("Year").copy()
 
@@ -742,9 +776,7 @@ elif page == "📦 Product Demand Segments":
 
     subcat_agg = (
 
-        subcat_basic.merge(volatility, on="Sub-Category")
-
-        .merge(avg_growth, on="Sub-Category")
+        subcat_basic.merge(volatility, on="Sub-Category").merge(avg_growth, on="Sub-Category")
 
     )
 
@@ -753,9 +785,6 @@ elif page == "📦 Product Demand Segments":
         ["Growth_Rate", "Volatility"]
 
     ].fillna(0)
-
-
-    # Replace inf values (caused by division by zero) with 0
 
     subcat_agg = subcat_agg.replace([np.inf, -np.inf], 0)
 
@@ -810,11 +839,7 @@ elif page == "📦 Product Demand Segments":
 
     st.dataframe(
 
-        subcat_agg[
-
-            ["Sub-Category", "Cluster", "Total_Sales", "Growth_Rate", "Volatility"]
-
-        ]
+        subcat_agg[["Sub-Category", "Cluster", "Total_Sales", "Growth_Rate", "Volatility"]]
 
         .sort_values(["Cluster", "Total_Sales"], ascending=[True, False])
 
@@ -833,5 +858,5 @@ elif page == "📦 Product Demand Segments":
 
 st.sidebar.markdown("---")
 
-st.sidebar.caption("Built with Streamlit · Prophet · scikit-learn · Plotly")
+st.sidebar.caption("Built with Streamlit · statsforecast · scikit-learn · Plotly")
 
