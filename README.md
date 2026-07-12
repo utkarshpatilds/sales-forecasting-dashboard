@@ -69,6 +69,6 @@ For business leaders who prefer high-level insights over code, please refer to s
 🤝 Connect with Me
 If you have any questions about this project or want to discuss supply chain analytics, feel free to reach out!
 Name: [Utkarsh Patil]
-LinkedIn: [Your LinkedIn URL]
-Email: [Your Email Address]
-Portfolio: [Your Website/Portfolio URL]
+LinkedIn: [https://www.linkedin.com/in/utkarshpatil-ds/]
+Email: [utkarshpatil432@gmail.com]
+
